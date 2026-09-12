@@ -1192,6 +1192,9 @@ await check('§8 a hub announcing an older bootstrap is flagged in /status and o
   eq(payload.bridge?.bootstrap?.shipped, config.bootstrapVersion, 'bridge.bootstrap.shipped');
   old.close();
   await old.closed;
+  // `closed` is the client's side of the socket; the bridge's side leaves OPEN a few ms later. Until it
+  // does, two sessions count as connected and the next check's session-less `run` would be refused.
+  await until(() => !bridge.registry.resolve(OLD_SESSION).connected, 1000, 'the bridge to notice the old hub closed');
 });
 
 await check('§1.1 reconnect: a new socket with the same session resumes with ackUpto = latest seq and keeps in-flight jobs', async () => {
