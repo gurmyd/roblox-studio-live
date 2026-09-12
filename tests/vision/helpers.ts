@@ -7,7 +7,7 @@
  *   vi.mock('@anthropic-ai/sdk', async (importOriginal) => (await import('./helpers.js')).mockedSdk(importOriginal));
  */
 import type Anthropic from '@anthropic-ai/sdk';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { vi } from 'vitest';
@@ -246,9 +246,21 @@ export async function waitFor(check: () => boolean, timeoutMs = 15_000, what = '
   }
 }
 
-/** Case- and separator-insensitive path equality (a `where` hit vs the path the test built). */
+/**
+ * Path equality for a `where`/`which` hit vs the path the test built: case- and separator-insensitive,
+ * and resolved through the file system so an 8.3 short name (GitHub's Windows runners set %TEMP% to
+ * `C:\Users\RUNNER~1\…`, which `where.exe` expands to the long name) compares equal to its long form.
+ */
 export function samePath(a: string | null | undefined, b: string): boolean {
   if (!a) return false;
-  const norm = (p: string): string => path.normalize(p).replace(/[\\/]+$/, '').toLowerCase();
-  return norm(a) === norm(b);
+  const canon = (p: string): string => {
+    let real = p;
+    try {
+      real = realpathSync.native(p);
+    } catch {
+      // not on disk: compare as written
+    }
+    return path.normalize(real).replace(/[\\/]+$/, '').toLowerCase();
+  };
+  return canon(a) === canon(b);
 }
