@@ -1,0 +1,24 @@
+# dependencies / build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# local agent workflow scripts and scratch
+.workflows/
+frames/
+
+# secrets — never commit a key (the bridge reads them from ~/.studio-live or the environment)
+*.key
+opencloud.json
+.env
+.env.*
+
+# logs / OS noise
+*.log
+.DS_Store
+Thumbs.db
+
+# editors
+.vscode/
+.idea/

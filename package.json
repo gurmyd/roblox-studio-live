@@ -1,0 +1,72 @@
+{
+  "name": "roblox-studio-live",
+  "version": "0.1.0",
+  "description": "Real-time Roblox Studio MCP server for AI agents: one WebSocket, an in-Studio agent runtime, push events, live playtest hot-patching, Open Cloud and vision.",
+  "keywords": [
+    "roblox",
+    "roblox-studio",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "luau",
+    "ai-agents",
+    "claude-code",
+    "codex",
+    "cursor",
+    "playtest",
+    "open-cloud",
+    "game-development"
+  ],
+  "homepage": "https://github.com/gurmyd/roblox-studio-live#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gurmyd/roblox-studio-live.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gurmyd/roblox-studio-live/issues"
+  },
+  "author": "gurmyd",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "studio-live": "dist/bridge/cli.js"
+  },
+  "files": [
+    "dist",
+    "plugin",
+    "scripts",
+    "skills",
+    "docs/agent-guide.md",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs && node scripts/pack-plugin.mjs",
+    "copy:assets": "node scripts/copy-assets.mjs",
+    "build:ts": "tsc -p tsconfig.json",
+    "pack:plugin": "node scripts/pack-plugin.mjs",
+    "dev": "tsx bridge/src/cli.ts serve",
+    "serve": "node dist/bridge/cli.js serve",
+    "install:studio": "node dist/bridge/cli.js install",
+    "test": "vitest run",
+    "selftest": "node scripts/selftest.mjs",
+    "fake-hub": "node scripts/fake-hub.mjs",
+    "luau:check": "node scripts/luau-check.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ws": "^8.21.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
