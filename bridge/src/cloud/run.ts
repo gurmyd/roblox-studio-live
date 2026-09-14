@@ -1,5 +1,6 @@
 import type { ZodError } from 'zod';
 import { dispatch } from './actions.js';
+import { permissionsOf } from './capabilities.js';
 import { CloudError } from './errors.js';
 import { maskSecret, renderResult, scrubSecret } from './format.js';
 import { createHttp } from './http.js';
@@ -10,53 +11,81 @@ import type { CloudContext, CloudLog, ToolText } from './types.js';
 const CREATOR_HUB_KEYS = 'https://create.roblox.com/dashboard/credentials';
 
 /**
- * Creator Hub permissions each action needs (API key → Access Permissions).
- * Scope names are the ones printed in the official reference for each operation.
+ * Creator Hub permissions each call needs (API key → Access Permissions), resolved through the
+ * one capability table in capabilities.ts. The `info what:"key"` probe reads the same table, so
+ * the permission a 403 tells you to add is always the one the probe measured.
  */
 export function permissionsFor(a: { action: CloudArgs['action']; op?: string | undefined; what?: string | undefined }): string[] {
-  const ds = (scope: string): string => `Data Stores → ${scope}`;
   switch (a.action) {
     case 'datastore':
       switch (a.op) {
         case 'list_stores':
-          return [ds('universe-datastores.control:list')];
+          return permissionsOf('datastore.list');
         case 'list_entries':
-          return [ds('universe-datastores.objects:list')];
+          return permissionsOf('datastore.listEntries');
         case 'get':
-          return [ds('universe-datastores.objects:read')];
+          return permissionsOf('datastore.read');
         case 'set':
-          return [ds('universe-datastores.objects:update'), ds('universe-datastores.objects:create (for keys that do not exist yet)')];
+          return permissionsOf('datastore.set');
         case 'delete':
-          return [ds('universe-datastores.objects:delete')];
+          return permissionsOf('datastore.delete');
         case 'increment':
-          return [ds('universe-datastores.objects:create'), ds('universe-datastores.objects:update')];
+          return permissionsOf('datastore.increment');
         default:
-          return [ds('universe-datastores.control:list'), ds('universe-datastores.objects:list / :read / :create / :update / :delete as needed')];
+          return ['Data Stores → universe-datastores.control:list', 'Data Stores → universe-datastores.objects:list / :read / :create / :update / :delete as needed'];
       }
     case 'ordered':
-      return a.op === 'list' || a.op === 'get'
-        ? ['Ordered Data Stores → universe.ordered-data-store.scope.entry:read']
-        : ['Ordered Data Stores → universe.ordered-data-store.scope.entry:write'];
+      return permissionsOf(a.op === 'list' || a.op === 'get' ? 'ordered.read' : 'ordered.write');
+    case 'memory':
+      switch (a.op) {
+        case 'map_list':
+        case 'map_get':
+          return permissionsOf('memory.mapRead');
+        case 'map_set':
+        case 'map_delete':
+          return permissionsOf('memory.mapWrite');
+        case 'queue_read':
+          return permissionsOf('memory.queueRead');
+        default:
+          return permissionsOf('memory.queueWrite');
+      }
     case 'message':
-      return ['Messaging Service → universe-messaging-service:publish'];
+      return permissionsOf('message.publish');
     case 'info':
       switch (a.what) {
         case 'key':
           // The probe needs no particular scope — reporting which ones are missing is its whole job.
           return ['none in particular — the probe reports which permissions this key has and which it lacks'];
         case 'group':
-          return ['Groups → Read (group:read)'];
+          return permissionsOf('info.group');
         case 'user':
-          return ['Users → Read (user.advanced:read; user.social:read for social profiles)'];
+          return permissionsOf('info.user');
         case 'me':
           return ['Groups → Read (group:read) for a group-owned place', 'Users → Read (user.advanced:read) for a user-owned place'];
+        case 'memberships':
+        case 'roles':
+          return permissionsOf('group.read');
+        case 'inventory':
+          return permissionsOf('inventory.read');
+        case 'subscription':
+          return permissionsOf('subscription.read');
         default:
           return ['the experience added to the key (Get Universe / Get Place list no extra scope in the reference)'];
       }
+    case 'publish':
+      return permissionsOf('place.publish');
     case 'asset_upload':
-      return ['Assets → Read + Write (asset:read, asset:write) for the creator that will own the asset'];
+      return permissionsOf('asset.upload');
+    case 'asset':
+      return permissionsOf(a.op === 'get' || a.op === 'versions' ? 'asset.read' : 'asset.upload');
     case 'luau':
-      return ['Luau Execution Sessions → Write (universe.place.luau-execution-session:write) for this experience'];
+      return permissionsOf('luau.execute');
+    case 'instance':
+      return permissionsOf(a.op === 'update' ? 'instance.write' : 'instance.read');
+    case 'restriction':
+      return permissionsOf(a.op === 'ban' || a.op === 'unban' ? 'restriction.write' : 'restriction.read');
+    case 'notify':
+      return permissionsOf('notify.send');
     default:
       return [];
   }
@@ -103,7 +132,7 @@ function describeError(err: CloudError, a: CloudArgs, ctx: CloudContext, permiss
     }
     case 'not_found': {
       const ids = ctx.ids();
-      const usesPlace = a.action === 'luau' || (a.action === 'info' && a.what === 'place');
+      const usesPlace = a.action === 'luau' || a.action === 'publish' || a.action === 'instance' || (a.action === 'restriction' && a.level === 'place') || (a.action === 'info' && a.what === 'place');
       extra.looked_up = {
         ...(a.universe_id ?? ids?.universeId ? { universe_id: a.universe_id ?? ids?.universeId } : {}),
         ...(usesPlace && (a.place_id ?? ids?.placeId) ? { place_id: a.place_id ?? ids?.placeId } : {}),
@@ -113,6 +142,17 @@ function describeError(err: CloudError, a: CloudArgs, ctx: CloudContext, permiss
         ...(a.id ? { id: a.id } : {}),
       };
       message += '. Check the ids/names in looked_up; a data store key that was never written also answers 404.';
+      break;
+    }
+    case 'conflict': {
+      if (a.action === 'publish') {
+        // The spec documents 409 only as "place not part of the universe", but the common cause
+        // is a busy place — an active Team Create session, or the place open in Studio, which is
+        // exactly the situation this tool runs in.
+        message +=
+          '. For publish a 409 usually means the place is busy rather than mismatched: an active Team Create session, or the place being open in Studio, blocks the upload. Close or stop editing it and retry in a minute. It can also mean place_id really does not belong to universe_id — check both against cloud info place.';
+        extra.likely_cause = 'the place is open in Studio or in an active Team Create session';
+      }
       break;
     }
     case 'rate_limited':

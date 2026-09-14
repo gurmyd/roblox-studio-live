@@ -40,6 +40,18 @@ export function requireInteger(value: unknown, name: string, hint: string): numb
   return value;
 }
 
+/**
+ * Per-attempt timeout for a request whose body is a file: the base timeout plus a second per
+ * 100 KB (≈ 0.8 Mbit/s floor), never below the caller's own wait and never above the cap. Used
+ * by the asset upload and by place publishing, neither of which may be retried.
+ */
+const UPLOAD_BYTES_PER_SECOND = 100 * 1024;
+
+export function uploadTimeoutMs(bytes: number, waitMs: number, baseMs: number, capMs: number): number {
+  const scaled = baseMs + Math.ceil(bytes / UPLOAD_BYTES_PER_SECOND) * 1000;
+  return Math.min(capMs, Math.max(waitMs, scaled));
+}
+
 export interface PollOptions<T> {
   deps: ActionDeps;
   /** Absolute timestamp to stop polling at. */

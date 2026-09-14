@@ -14,7 +14,7 @@ export function buildInstructions(port: number): string {
     "4. Undo semantics: edit-DM runs are ONE undo step and roll back on error. Play-DM runs are ephemeral — lost on stop, never undoable. With two Studios open, write tools require `session`. Overlapping or nested parts are reported in run.geometry — fix them before moving on; set geometry_policy 'reject' to have such runs rolled back.",
     '5. `observe tree|props|find|diff|player` are exact and cheap; use them for anything that IS state. `look {question}` answers a visual question in text (no image in your context); `look {watch}` streams `vision` events; `observe screenshot` returns the image. `input` x,y are GUI-space (AbsolutePosition) by default; gui: false means viewport pixels, NOT screenshot pixels.',
     "6. Long work returns {job_id, status:'running'} after wait_ms; use `job wait|status|cancel|list`. Save reusable programs with `skills save` and run them with `skills run`.",
-    '7. `cloud` reaches Open Cloud (data stores, messaging, asset upload, server-side Luau, universe/place/owner info) for the open place; ids default from the connected session.',
+    '7. `cloud`: Open Cloud for the open place; ids come from the session. Call info what:"key" first; publish before luau/instance, which read the published place.',
   ].join('\n');
 }
 

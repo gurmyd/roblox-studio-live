@@ -2,10 +2,16 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { CloudError, badRequest } from './errors.js';
 import { REQUEST_TIMEOUT_MS, type HttpClient } from './http.js';
+import { asset } from './assets.js';
 import { creatorFrom, ownerIdOfType, placeFrom, universeFrom, type Creator } from './ids.js';
+import { instance } from './instances.js';
+import { memory } from './memory.js';
+import { notify } from './notify.js';
 import { probeKey } from './probe.js';
-import { MAX_WAIT_MS, type CloudArgs } from './schema.js';
-import { ASSETS_V1, CLOUD_V2, DEFAULT_WAIT_MS, asObject, enc, need, stringField } from './shared.js';
+import { publish } from './publish.js';
+import { restriction } from './restrictions.js';
+import { INFO_WHAT, MAX_WAIT_MS, type CloudArgs } from './schema.js';
+import { ASSETS_V1, CLOUD_V2, DEFAULT_WAIT_MS, asObject, enc, need, stringField, uploadTimeoutMs as scaledUploadTimeoutMs } from './shared.js';
 import type { ActionDeps, ActionOutcome, CloudContext } from './types.js';
 
 /**
@@ -235,8 +241,51 @@ async function info(a: CloudArgs, ctx: CloudContext, http: HttpClient, deps: Act
       const p = creator.type === 'Group' ? `${CLOUD_V2}/groups/${creator.id}` : `${CLOUD_V2}/users/${creator.id}`;
       return { value: { what, creator, ids_from: 'studio', ...(await get(p)) } };
     }
+    case 'memberships': {
+      const id = ownerIdOfType('Group', a.id, ctx);
+      // https://create.roblox.com/docs/cloud/reference/GroupMembership — List Group Memberships:
+      // GET /cloud/v2/groups/{group_id}/memberships?maxPageSize(≤100)&pageToken&filter
+      // Each membership carries `role` (the member's HIGHEST-ranked role) and `roles` (all of them).
+      const res = await http.request({ method: 'GET', path: `${CLOUD_V2}/groups/${id}/memberships`, query: { maxPageSize: a.page_size, pageToken: a.page_token, filter: a.filter }, idempotent: true });
+      return { value: { what, group_id: id, ids_from: a.id ? 'args' : 'studio', ...asObject(res.body) } };
+    }
+    case 'roles': {
+      const id = ownerIdOfType('Group', a.id, ctx);
+      // https://create.roblox.com/docs/cloud/reference/GroupRole — List Group Roles:
+      // GET /cloud/v2/groups/{group_id}/roles?maxPageSize(≤20)&pageToken
+      if (a.page_size !== undefined && a.page_size > 20) throw badRequest(`page_size is ${a.page_size}; List Group Roles allows at most 20`);
+      const res = await http.request({ method: 'GET', path: `${CLOUD_V2}/groups/${id}/roles`, query: { maxPageSize: a.page_size, pageToken: a.page_token }, idempotent: true });
+      return { value: { what, group_id: id, ids_from: a.id ? 'args' : 'studio', ...asObject(res.body) } };
+    }
+    case 'inventory': {
+      const id = need(a.id, 'id', 'for info inventory (the user whose inventory to read)');
+      // https://create.roblox.com/docs/cloud/reference/InventoryItem — List Inventory Items:
+      // GET /cloud/v2/users/{user_id}/inventory-items?filter&maxPageSize(≤100)&pageToken
+      // The filter is Roblox's own key=value grammar, not CEL, and type fields (badges,
+      // gamePasses, inventoryItemAssetTypes) cannot be combined with id fields.
+      const res = await http.request({ method: 'GET', path: `${CLOUD_V2}/users/${id}/inventory-items`, query: { maxPageSize: a.page_size, pageToken: a.page_token, filter: a.filter }, idempotent: true });
+      return {
+        value: {
+          what,
+          user_id: id,
+          ...asObject(res.body),
+          ...(a.filter ? {} : { filter_hint: 'Without a filter only a default slice comes back. Example: filter "inventoryItemAssetTypes=HAT,CLASSIC_PANTS" or "gamePasses=true"; type and id fields cannot be combined.' }),
+        },
+      };
+    }
+    case 'subscription': {
+      const productId = need(a.product_id, 'product_id', 'for info subscription (the subscription product id)');
+      const userId = need(a.id, 'id', 'for info subscription (the subscriber’s user id — it doubles as the subscription id)');
+      const u = universeFrom(a, ctx);
+      // https://create.roblox.com/docs/cloud/reference/Subscription — Get Subscription:
+      // GET /cloud/v2/universes/{u}/subscription-products/{p}/subscriptions/{subscription_id}?view
+      // The subscription id IS the user id. view defaults to BASIC, which omits most fields, so
+      // FULL is requested here — a sparse BASIC response reads as missing data, not as a choice.
+      const res = await http.request({ method: 'GET', path: `${CLOUD_V2}/universes/${u.universeId}/subscription-products/${productId}/subscriptions/${userId}`, query: { view: 'FULL' }, idempotent: true });
+      return { value: { what, universe_id: u.universeId, product_id: productId, user_id: userId, ids_from: u.from, ...asObject(res.body) } };
+    }
     default:
-      throw badRequest(`what "${String(what)}" is not supported (use universe | place | group | user | me)`);
+      throw badRequest(`what "${String(what)}" is not supported (use ${INFO_WHAT.join(' | ')})`);
   }
 }
 
@@ -269,9 +318,6 @@ const CONTENT_TYPES: Record<string, string> = {
  * is case-sensitive on the server, so lower-case spellings are normalised to these.
  */
 export const ASSET_TYPES = ['Audio', 'Decal', 'Image', 'Model', 'Video', 'Animation', 'Mesh'];
-/** Upload budget: 30 s base + 1 s per 100 KB (≈ 0.8 Mbit/s floor), raised by timeout_ms, capped at MAX_WAIT_MS. */
-const UPLOAD_BYTES_PER_SECOND = 100 * 1024;
-
 function normalizeAssetType(raw: string): string {
   const match = ASSET_TYPES.find((t) => t.toLowerCase() === raw.trim().toLowerCase());
   return match ?? raw.trim();
@@ -279,8 +325,7 @@ function normalizeAssetType(raw: string): string {
 
 /** Per-attempt timeout for the multipart create-asset POST, so a large file on a slow uplink can finish. */
 export function uploadTimeoutMs(bytes: number, waitMs: number): number {
-  const scaled = REQUEST_TIMEOUT_MS + Math.ceil(bytes / UPLOAD_BYTES_PER_SECOND) * 1000;
-  return Math.min(MAX_WAIT_MS, Math.max(waitMs, scaled));
+  return scaledUploadTimeoutMs(bytes, waitMs, REQUEST_TIMEOUT_MS, MAX_WAIT_MS);
 }
 
 /**
@@ -520,12 +565,24 @@ export async function dispatch(a: CloudArgs, ctx: CloudContext, http: HttpClient
       return ordered(a, ctx, http);
     case 'message':
       return message(a, ctx, http);
+    case 'memory':
+      return memory(a, ctx, http);
     case 'info':
       return info(a, ctx, http, deps);
+    case 'publish':
+      return publish(a, ctx, http);
     case 'asset_upload':
       return assetUpload(a, ctx, http, deps);
+    case 'asset':
+      return asset(a, http, deps);
     case 'luau':
       return luau(a, ctx, http, deps);
+    case 'instance':
+      return instance(a, ctx, http, deps);
+    case 'restriction':
+      return restriction(a, ctx, http);
+    case 'notify':
+      return notify(a, ctx, http);
     default:
       throw badRequest(`unknown action ${String((a as { action: unknown }).action)}`);
   }

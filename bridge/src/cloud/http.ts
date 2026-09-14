@@ -29,6 +29,8 @@ export interface CloudRequest {
   query?: Query;
   json?: unknown;
   form?: FormData;
+  /** Raw request body with an explicit content type — place publishing uploads the file bytes directly. */
+  raw?: { bytes: Buffer; contentType: string };
   /** Safe to resend after a network failure, timeout or 5xx (GET, DELETE, full-value PATCH). */
   idempotent?: boolean;
   /**
@@ -38,6 +40,12 @@ export interface CloudRequest {
    * good answer for a probe that could not settle.
    */
   noRetry?: boolean;
+  /**
+   * Send the API key as this JSON body field instead of the x-api-key header. Only the key
+   * introspection endpoint (POST /api-keys/v1/introspect {"apiKey": …}) wants it there. Building the
+   * body here keeps the key inside this module: callers never hold it, and no log line carries a body.
+   */
+  keyInBody?: string;
   /** Per-attempt timeout for this request (default REQUEST_TIMEOUT_MS); large uploads raise it. */
   timeoutMs?: number;
 }
@@ -152,10 +160,16 @@ export function createHttp(options: HttpOptions): HttpClient {
     const logPath = url.pathname + url.search;
     const timeoutMs = req.timeoutMs ?? defaultTimeoutMs;
     for (let attempt = 0; ; attempt++) {
-      const headers: Record<string, string> = { 'x-api-key': options.key, accept: 'application/json' };
+      const headers: Record<string, string> = req.keyInBody ? { accept: 'application/json' } : { 'x-api-key': options.key, accept: 'application/json' };
       let body: RequestInit['body'];
-      if (req.form) {
+      if (req.keyInBody) {
+        headers['content-type'] = 'application/json';
+        body = JSON.stringify({ [req.keyInBody]: options.key });
+      } else if (req.form) {
         body = req.form;
+      } else if (req.raw) {
+        headers['content-type'] = req.raw.contentType;
+        body = req.raw.bytes;
       } else if (req.json !== undefined) {
         headers['content-type'] = 'application/json';
         body = JSON.stringify(req.json);
