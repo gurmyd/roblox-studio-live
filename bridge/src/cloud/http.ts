@@ -31,6 +31,13 @@ export interface CloudRequest {
   form?: FormData;
   /** Safe to resend after a network failure, timeout or 5xx (GET, DELETE, full-value PATCH). */
   idempotent?: boolean;
+  /**
+   * Never retry this request, not even a 429. The capability probe sets it: it fires one
+   * request per capability, so the usual "a 429 was never processed, resend it" rule would
+   * turn a rate-limited probe into four times as many requests — and `unknown` is a perfectly
+   * good answer for a probe that could not settle.
+   */
+  noRetry?: boolean;
   /** Per-attempt timeout for this request (default REQUEST_TIMEOUT_MS); large uploads raise it. */
   timeoutMs?: number;
 }
@@ -162,7 +169,7 @@ export function createHttp(options: HttpOptions): HttpClient {
         const timedOut = name === 'TimeoutError' || name === 'AbortError';
         const reason = err instanceof Error ? (err.cause instanceof Error ? `${err.message} (${err.cause.message})` : err.message) : String(err);
         options.log('warn', 'cloud request failed', { method: req.method, path: logPath, attempt, error: reason });
-        if (req.idempotent && attempt < MAX_RETRIES) {
+        if (req.idempotent && !req.noRetry && attempt < MAX_RETRIES) {
           await sleep(BACKOFF_BASE_MS * 2 ** attempt);
           continue;
         }
@@ -177,7 +184,7 @@ export function createHttp(options: HttpOptions): HttpClient {
         const retryAfterMs = parseRetryAfter(res.headers.get('retry-after'));
         const waitMs = retryAfterMs ?? BACKOFF_BASE_MS * 2 ** attempt;
         // A 429 was never processed, so it is always safe to resend; a 5xx may have been.
-        const safeToResend = res.status === 429 || req.idempotent === true;
+        const safeToResend = !req.noRetry && (res.status === 429 || req.idempotent === true);
         if (safeToResend && attempt < MAX_RETRIES && waitMs <= MAX_RETRY_WAIT_MS) {
           options.log('warn', 'cloud request retried', { method: req.method, path: logPath, status: res.status, wait_ms: waitMs, attempt: attempt + 1 });
           await sleep(waitMs);

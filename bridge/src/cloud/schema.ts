@@ -5,7 +5,7 @@ export const cloudToolName: 'cloud' = 'cloud';
 export const CLOUD_ACTIONS = ['datastore', 'ordered', 'message', 'info', 'asset_upload', 'luau'] as const;
 export const DATASTORE_OPS = ['list_stores', 'list_entries', 'get', 'set', 'delete', 'increment'] as const;
 export const ORDERED_OPS = ['list', 'get', 'set', 'delete', 'increment'] as const;
-export const INFO_WHAT = ['universe', 'place', 'group', 'user', 'me'] as const;
+export const INFO_WHAT = ['universe', 'place', 'group', 'user', 'me', 'key'] as const;
 export const MAX_WAIT_MS = 300_000;
 
 const idArg = z.number().int().positive();
@@ -32,8 +32,9 @@ export const cloudToolShape = {
   show_deleted: z.boolean().optional().describe('datastore list ops: include deleted'),
   topic: z.string().min(1).max(80).optional().describe('message: MessagingService topic (≤ 80 chars)'),
   message: z.unknown().optional().describe('message: string or JSON (≤ 1 KB)'),
-  what: z.enum(INFO_WHAT).optional().describe('info: universe | place | group | user | me (me = owner of the open place)'),
+  what: z.enum(INFO_WHAT).optional().describe('info: universe | place | group | user | me (owner of the open place) | key (what this API key is allowed to do)'),
   id: idArg.optional().describe('info group/user: explicit id (default: the owner of the open place)'),
+  deep: z.boolean().optional().describe('info key: also probe writes that a delete against a reserved name can settle (nothing real is deleted)'),
   file: z.string().min(1).optional().describe('asset_upload: absolute path of the file'),
   asset_type: z.string().min(1).optional().describe('asset_upload: Model | Decal | Audio | Video | Animation | Mesh (also Image)'),
   name: z.string().min(1).max(50).optional().describe('asset_upload: display name'),

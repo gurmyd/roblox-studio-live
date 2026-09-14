@@ -3,47 +3,21 @@ import path from 'node:path';
 import { CloudError, badRequest } from './errors.js';
 import { REQUEST_TIMEOUT_MS, type HttpClient } from './http.js';
 import { creatorFrom, ownerIdOfType, placeFrom, universeFrom, type Creator } from './ids.js';
+import { probeKey } from './probe.js';
 import { MAX_WAIT_MS, type CloudArgs } from './schema.js';
-import type { CloudContext } from './types.js';
+import { ASSETS_V1, CLOUD_V2, DEFAULT_WAIT_MS, asObject, enc, need, stringField } from './shared.js';
+import type { ActionDeps, ActionOutcome, CloudContext } from './types.js';
 
 /**
- * The six actions. Every endpoint below is taken from the official reference
- * (URL cited above each call). All paths are relative to https://apis.roblox.com.
+ * The core actions (datastore, ordered, message, info, asset_upload, luau). Every endpoint
+ * below is taken from the official reference (URL cited above each call); all paths are
+ * relative to https://apis.roblox.com. Later surfaces live in their own modules and are
+ * wired into `dispatch` at the bottom of this file.
  */
-export interface ActionDeps {
-  sleep(ms: number): Promise<void>;
-  now(): number;
-}
-
-export interface ActionOutcome {
-  value: Record<string, unknown>;
-  isError?: boolean;
-}
-
-const CLOUD_V2 = '/cloud/v2';
-const ASSETS_V1 = '/assets/v1';
-const DEFAULT_WAIT_MS = 60_000;
 /** publishMessage: message ≤ 1 KB (https://create.roblox.com/docs/cloud/guides/usage-messaging). */
 const MESSAGE_MAX_BYTES = 1024;
 const MAX_LOG_PAGES = 5;
 const LUAU_PENDING_STATES = new Set(['QUEUED', 'PROCESSING']);
-
-const enc = encodeURIComponent;
-
-function need<T>(value: T | undefined, name: string, hint: string): T {
-  if (value === undefined || value === null || (typeof value === 'string' && value === '')) throw badRequest(`${name} is required ${hint}`);
-  return value;
-}
-
-function asObject(body: unknown): Record<string, unknown> {
-  if (typeof body === 'object' && body !== null && !Array.isArray(body)) return body as Record<string, unknown>;
-  return body === null || body === undefined ? {} : { body };
-}
-
-function stringField(record: Record<string, unknown>, field: string): string | undefined {
-  const value = record[field];
-  return typeof value === 'string' && value !== '' ? value : undefined;
-}
 
 function userPaths(users: number[] | undefined): { users: string[] } | Record<string, never> {
   // DataStoreEntry.users holds resource paths "users/{id}" (https://create.roblox.com/docs/cloud/reference/DataStoreEntry).
@@ -224,10 +198,13 @@ async function message(a: CloudArgs, ctx: CloudContext, http: HttpClient): Promi
 // info
 // ---------------------------------------------------------------------------
 
-async function info(a: CloudArgs, ctx: CloudContext, http: HttpClient): Promise<ActionOutcome> {
-  const what = need(a.what, 'what', 'for info: universe | place | group | user | me');
+async function info(a: CloudArgs, ctx: CloudContext, http: HttpClient, deps: ActionDeps): Promise<ActionOutcome> {
+  const what = need(a.what, 'what', 'for info: universe | place | group | user | me | key');
   const get = async (p: string): Promise<Record<string, unknown>> => asObject((await http.request({ method: 'GET', path: p, idempotent: true })).body);
   switch (what) {
+    case 'key':
+      // No Open Cloud endpoint describes a key, so this one is measured by probing (probe.ts).
+      return probeKey(a, ctx, http, deps.keySource);
     case 'universe': {
       const u = universeFrom(a, ctx);
       // https://create.roblox.com/docs/cloud/reference/Universe — Get Universe: GET /cloud/v2/universes/{universe_id}
@@ -544,7 +521,7 @@ export async function dispatch(a: CloudArgs, ctx: CloudContext, http: HttpClient
     case 'message':
       return message(a, ctx, http);
     case 'info':
-      return info(a, ctx, http);
+      return info(a, ctx, http, deps);
     case 'asset_upload':
       return assetUpload(a, ctx, http, deps);
     case 'luau':

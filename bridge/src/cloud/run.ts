@@ -41,6 +41,9 @@ export function permissionsFor(a: { action: CloudArgs['action']; op?: string | u
       return ['Messaging Service → universe-messaging-service:publish'];
     case 'info':
       switch (a.what) {
+        case 'key':
+          // The probe needs no particular scope — reporting which ones are missing is its whole job.
+          return ['none in particular — the probe reports which permissions this key has and which it lacks'];
         case 'group':
           return ['Groups → Read (group:read)'];
         case 'user':
@@ -154,7 +157,7 @@ export async function runCloudTool(args: unknown, ctx: CloudContext): Promise<To
   const http = createHttp({ key, log });
 
   try {
-    const outcome = await dispatch(a, ctx, http, realDeps);
+    const outcome = await dispatch(a, ctx, http, { ...realDeps, keySource: describeKeySource(resolved.source, ctx.home) });
     return finish(outcome.value, key, outcome.isError === true);
   } catch (err) {
     if (err instanceof CloudError) {
