@@ -147,7 +147,7 @@ Known cosmetic gap: `changes.paths` for a removed instance the journal never saw
 | `cloud info group` with a group-owned key | `unauthorized` + `key_type_limit: true` with the explanation (Roblox Groups/Users endpoints accept user keys only); universe-scoped calls all work |
 | Marker parts | Invisible + non-colliding parts (spawn spots, waypoints, triggers) are now skipped by the check; final arena audit: **0 overlaps, 0 nested** across 267 parts (230 geometry, 37 markers) in 1.1 ms |
 
-## Cloud surface — live results so far, and what is still open (offline state: `npm test` 374/374 in 30 files, `npm run selftest` 57/57, `luau:check` only the advisory `version()` lint, rbxmx 18515 chars)
+## Cloud surface — live results so far, and what is still open (offline state: `npm test` 375/375 in 30 files, `npm run selftest` 57/57, `luau:check` only the advisory `version()` lint, rbxmx 18515 chars)
 
 Every path, verb and body field was checked against Roblox's OpenAPI spec and guides, and the request shapes are pinned by `tests/cloud/surfaces.test.ts` and `probe.test.ts` against a fake Open Cloud. Read-only checks against the real service (2026-09-14, no Studio session connected):
 
@@ -170,13 +170,16 @@ Then with Studio connected to a throwaway test place in the key's universe, writ
 | `asset update` | a new `.fbx` put revision 2 behind the same Model id. A Decal answered `400 Updating Decal is not supported yet`, so the tool now refuses non-FBX files locally. A metadata-only update came back as an operation with the version unchanged, and the result no longer claims a new version |
 | `asset versions` / `rollback` / `archive` / `restore` | versions newest first; rollback from v2 to v1 created v3, and Roblox accepted the JSON body (`sent_as: "json"`). The Decal archived (`Archived`) and restored (`Active`); the Model answered `400 … is not an archivable asset type` |
 | `instance children` / `update` | reads settle in ~0.8–0.9 s. The root's ~90 children overflowed the 20 KB cap in the verbose form (50 shown, 41 cut, and `maxPageSize` is not implemented); children are now compact and all fit in ~11 KB. An update aimed at a Part as a Folder failed inside the operation with `Incorrect Class Type: Instance is of type Part`, so the write route works |
-| `restriction` | `list` / `get` / `logs` correct; a 60 s universe-level `ban` on the owner's own account and the `unban` both applied, and `logs` showed both. A 60 s `level: "place"` ban went through the place path and was lifted the same way. User id 1 answered `429 too many requests for user 1` on every attempt, retries included, so ban / unban are no longer retried |
+| `restriction` | `list` / `get` / `logs` correct; a 60 s universe-level `ban` on the owner's own account and the `unban` both applied, and `logs` showed both. A 60 s `level: "place"` ban went through the place path and was lifted the same way; its log entries carry the place id. User id 1 answered `429 too many requests for user 1` on every attempt, retries included, so ban / unban are no longer retried |
 | `notify` | auth and body accepted; Roblox refused the recipient with `400 FAILED_PRECONDITION … not opted in`, which the error now says (`not_opted_in: true`) |
 | `info memberships` / `inventory` | both `401` for a group-owned key. Inventory words it `Authentication type provided was invalid!`, which the tool had blamed on the key; it now reports `key_type_limit`, and the key report marks `info inventory` unknown |
 | Saving the place from Studio | not possible from a plugin: `game:SavePlace` → "can only be called from a server script"; `SerializationService` refuses services; the only plugin save calls are dialogs for a selection |
+
+After the fixes, every surface was run again through the reloaded MCP on the fixed build, plus a MessagingService `message`. Each fix showed live: the root's 92 children listed in full; `info inventory` unknown in the key report and `key_type_limit` on the call; `not_opted_in` on `notify`; a PNG `asset update` refused before any upload; a metadata-only update reported with its version unchanged; the queue note naming the real invisibility window; `rollback` reporting `sent_as: "json"`. One more finding: List Data Stores on a universe with none answers `{}`, so list results now always carry their list field.
 
 Still to verify live:
 
 1. **`publish`** of a place file saved from Studio → `version_number` increments. Note whether the place being open in Studio causes the documented busy-place `409`.
 2. **`instance update`** succeeding on a script in the published place (needs a published place that has one), read back with `cloud luau`.
 3. **`notify`** delivered: needs an opted-in player and a real notification string.
+4. **`info subscription`**: needs a subscription product in the experience.

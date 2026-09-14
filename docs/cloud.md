@@ -112,7 +112,7 @@ All results are JSON text, at most 20 KB and always parseable. When a result is 
 - `scope` is optional (omit = Roblox's default `global` scope). `get` returns the full entry: `value`, `etag`, `revisionId`, `revisionCreateTime`, `createTime`, `state`, `users`, `attributes`.
 - `set` is an upsert (`PATCH …?allowMissing=true`). Pass `etag` to write only if the entry is unchanged since you read it (a mismatch → `error.code = "conflict"`). Per the reference, omitted `users`/`attributes` are cleared on update.
 - `increment` needs an integer `amount` (the reference: both the stored value and the amount must be integers); a non-integer is rejected locally as `bad_request`.
-- List results carry `nextPageToken`; pass it back as `page_token`.
+- List results carry `nextPageToken`; pass it back as `page_token`. The list field is always present: a universe with no data stores answers `{}`, returned as `dataStores: []` (measured).
 
 ### 3.2 `ordered` — ordered data stores (v2)
 

@@ -614,3 +614,18 @@ describe('info reads added with this surface', () => {
     expect(err.message).not.toMatch(/mistyped|revoked/);
   });
 });
+
+// ---------------------------------------------------------------------------
+describe('empty listings', () => {
+  it('always returns the list field, so an empty universe reads as zero stores rather than a missing answer', async () => {
+    // Live, List Data Stores on a universe with none answered {}: the result carried no dataStores field at all.
+    const { ctx } = makeCtx(home);
+    fake.respond(() => ({ body: {} }));
+    expect(parse(await runCloudTool({ action: 'datastore', op: 'list_stores' }, ctx)).dataStores).toEqual([]);
+    expect(parse(await runCloudTool({ action: 'datastore', op: 'list_entries', store: 'S' }, ctx)).dataStoreEntries).toEqual([]);
+    expect(parse(await runCloudTool({ action: 'ordered', op: 'list', store: 'S' }, ctx)).orderedDataStoreEntries).toEqual([]);
+
+    fake.respond(() => ({ body: { dataStores: [{ id: 'PlayerData' }], nextPageToken: 't' } }));
+    expect(parse(await runCloudTool({ action: 'datastore', op: 'list_stores' }, ctx))).toMatchObject({ dataStores: [{ id: 'PlayerData' }], nextPageToken: 't' });
+  });
+});

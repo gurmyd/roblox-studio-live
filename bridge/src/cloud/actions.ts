@@ -49,7 +49,8 @@ async function datastore(a: CloudArgs, ctx: CloudContext, http: HttpClient): Pro
       query: { maxPageSize: a.page_size, pageToken: a.page_token, filter: a.filter, showDeleted: a.show_deleted },
       idempotent: true,
     });
-    return { value: { ...context, ...asObject(res.body) } };
+    // A universe with no data stores answers {} (measured); the empty list says "none" instead of nothing.
+    return { value: { ...context, dataStores: [], ...asObject(res.body) } };
   }
 
   const store = need(a.store, 'store', 'for datastore ops');
@@ -68,7 +69,7 @@ async function datastore(a: CloudArgs, ctx: CloudContext, http: HttpClient): Pro
         query: { maxPageSize: a.page_size, pageToken: a.page_token, filter: a.filter, showDeleted: a.show_deleted },
         idempotent: true,
       });
-      return { value: { ...entryContext, ...asObject(res.body) } };
+      return { value: { ...entryContext, dataStoreEntries: [], ...asObject(res.body) } };
     }
     case 'get': {
       const key = need(a.key, 'key', 'for datastore get');
@@ -141,7 +142,7 @@ async function ordered(a: CloudArgs, ctx: CloudContext, http: HttpClient): Promi
         query: { maxPageSize: a.page_size, pageToken: a.page_token, orderBy: a.order_by, filter: a.filter },
         idempotent: true,
       });
-      return { value: { ...context, ...asObject(res.body) } };
+      return { value: { ...context, orderedDataStoreEntries: [], ...asObject(res.body) } };
     }
     case 'get': {
       const key = need(a.key, 'key', 'for ordered get');
