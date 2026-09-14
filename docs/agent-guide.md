@@ -13,7 +13,7 @@ You are talking to a live Roblox Studio through nine tools. This guide is the wo
 7. **Never put Luau through a shell.** Heredocs and quoting turn `\n` inside a Luau string into a real newline and the program fails with `Malformed string`. Pass code from a file: `code_file` / `source_file` / `predicate_file` on the tools, `--code-file` on `studio-live call` **(v1.1)**. See "Passing Luau safely".
 8. **Stay small.** Results are capped (`concise` ≈ 20 KB). Ask `observe` for `fields` you need, `max` you can read, `depth` you will use. Return summaries from programs, not whole tables. Long work returns a job handle — `job wait` it rather than polling.
 9. **Save what works.** `skills save` stores a program on disk; `skills run` executes it with new `ARGS` in a later session. Eight builtin skills ship with the bridge (`skills list` marks them `builtin: true`) — check them before writing a physics settle, profiler capture or attribute sweep yourself.
-10. **Open Cloud needs no ids from you.** `cloud` reaches data stores, ordered stores, MessagingService, universe/place/owner info, asset upload and server-side Luau execution for the open place; `universe_id`, `place_id` and the creator default from the connected Studio session, so pass them only to address another experience. See "Open Cloud for the open place".
+10. **Open Cloud needs no ids from you.** `cloud` reaches data stores, ordered and memory stores, MessagingService, place publishing, the asset lifecycle, server-side Luau, the Instance API, bans and notifications for the open place; `universe_id`, `place_id` and the creator default from the connected Studio session, so pass them only to address another experience. Start cloud work with `cloud { action: "info", what: "key" }` — it reads what the key may do, writes included, before you plan around it. See "Open Cloud for the open place".
 11. **Sharing a Studio with other agents?** Read "Multi-agent contract" first: shared roots via `S.ensure`, never destroy what you did not create, one owner for Workspace-level cleanup.
 12. **No parts in parts.** Every edit-DM `run` checks the parts it added for intersections with other parts and for `Part`s parented under `Part`s, and reports them in `geometry` + `warnings`; a non-empty `geometry` is a failed step — fix it before building on top (`S.placeOn`, `S.fits`). `geometry_policy: "reject"` makes such a run roll back. See "Geometry rules (enforced)".
 
@@ -450,11 +450,32 @@ Rule: state → `observe`; appearance → `look`; verify anything `look` tells y
 ## Open Cloud for the open place: `cloud`
 
 ```json
+cloud { "action": "info", "what": "key" }
 cloud { "action": "info", "what": "universe" }
 cloud { "action": "datastore", "op": "get", "store": "PlayerData", "key": "p_100000001" }
+cloud { "action": "memory", "op": "map_set", "store": "Lobby", "key": "p_1", "value": { "mmr": 1500 }, "sort_key": 1500, "ttl_s": 300 }
 cloud { "action": "message", "topic": "Announce", "message": { "kind": "reload" } }
+cloud { "action": "publish", "file": "C:\\places\\game.rbxl" }
 cloud { "action": "luau", "script": "return #workspace:GetDescendants()" }
+cloud { "action": "asset", "op": "update", "asset_id": 5551234, "file": "C:\\art\\logo_v2.png" }
 ```
+
+### What the key can do: ask first
+
+`info what:"key"` reads the key's own scope list from Roblox's key introspection endpoint and reports every capability as `allowed`, `denied` or `unknown`, each with the permission to add — writes included, and nothing is called to find out (`method: "introspect"`). `bound_to_this_universe: false` means the key was never given this experience at all: one fix in Creator Hub, not a dozen. If introspection is unavailable the report falls back to trial reads against reserved names (`method: "probe"`), which cannot settle writes; `deep: true` adds the harmless ones that can. `unknown` on `info group` / `info user` is expected: they need no scope, but Roblox refuses group-owned keys there.
+
+### The published place is not the open place
+
+`luau` and `instance` read the **published** place. After editing in Studio, save the place to a file (File → Save to File) and `cloud publish` it, then read it back. `publish` checks the file's bytes (a non-place file is refused before upload), goes live by default (`version_type: "Saved"` stores a version without publishing), and lists in `not_updated_by_this_api` the instance types the publish API silently does not carry — unions (`PartOperation`), `EditableMesh` / `EditableImage`, `SurfaceAppearance`, `BaseWrap`; if the place uses them, publish from Studio instead. A `409` on publish usually means the place is busy — open in Studio or in Team Create — not that the ids are wrong.
+
+`instance update` writes only `Folder`, `Script`, `LocalScript` and `ModuleScript` (and only `Source` / `Enabled` / `RunContext`); everything else goes through `run` and a publish. Every Instance API call is long-running, reads included.
+
+### The rest, briefly
+
+- `asset_upload` mints a new id every time; `asset update` puts a new version behind an **existing** id, so every `rbxassetid://` already placed in the game picks it up. `asset rollback` / `archive` / `restore` complete the lifecycle (there is no delete).
+- `memory` sorted maps and queues are live cross-server state with a `ttl_s`. Sorted map writes replace the whole item. A queue read hides items for `invisibility_s` rather than removing them; `queue_discard` with the returned `read_id` acknowledges the batch. There is no sorted-map increment in Open Cloud, and the universe-wide `flush` is deliberately not exposed.
+- `restriction ban` bans from the whole experience unless you pass `level: "place"` — never inferred from the session's place id. Omit `duration_s` for a permanent ban; `unban` lifts it.
+- `notify` sends an experience notification using a notification string made in Creator Hub (`message_id`). Delivery is not guaranteed and Open Cloud cannot check eligibility.
 
 ### How ids are inferred
 
@@ -462,7 +483,7 @@ cloud { "action": "luau", "script": "return #workspace:GetDescendants()" }
 2. Otherwise the ids of the connected session are used (`ids_from: "studio"`): `placeId` and `placeName` come from the hub's `hello`; `universeId` (`game.GameId`), `creatorType` (`User` | `Group`) and `creatorId` arrive with the hub's **first heartbeat**, a second or so after connect. A call in that first second gets a distinct `no_ids` "not known yet" message — retry once. An unpublished place (`PlaceId 0`) gets "publish it first".
 3. With two Studios connected, `session` picks whose ids are used, exactly as for every other tool.
 
-The key is read from disk on every call (`ROBLOX_OPEN_CLOUD_KEY`, `<STUDIO_LIVE_HOME>/opencloud.json`, `<STUDIO_LIVE_HOME>/opencloud.key`) and a `403` names the exact Creator Hub permission to add. `cloud luau` runs against the *published* place, not the Studio session — `run` is for the open DataModel. Actions, limits and error codes: [cloud.md](cloud.md).
+The key is read from disk on every call (`ROBLOX_OPEN_CLOUD_KEY`, `<STUDIO_LIVE_HOME>/opencloud.json`, `<STUDIO_LIVE_HOME>/opencloud.key`) and a `403` names the exact Creator Hub permission to add. Actions, limits and error codes: [cloud.md](cloud.md).
 
 ## Long operations
 

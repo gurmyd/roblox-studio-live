@@ -146,3 +146,25 @@ Known cosmetic gap: `changes.paths` for a removed instance the journal never saw
 | `look` (no API key) | answered through the user's Claude Code login: `provider: claude-cli`, model `sonnet`, 6.8 s model / 8.0 s wall, sensible one-sentence description |
 | `cloud info group` with a group-owned key | `unauthorized` + `key_type_limit: true` with the explanation (Roblox Groups/Users endpoints accept user keys only); universe-scoped calls all work |
 | Marker parts | Invisible + non-colliding parts (spawn spots, waypoints, triggers) are now skipped by the check; final arena audit: **0 overlaps, 0 nested** across 267 parts (230 geometry, 37 markers) in 1.1 ms |
+
+## Cloud surface — live results so far, and what is still open (offline state: `npm test` 367/367 in 30 files, `npm run selftest` 57/57, `luau:check` only the advisory `version()` lint, rbxmx 18515 chars)
+
+Every path, verb and body field was checked against Roblox's OpenAPI spec and guides, and the request shapes are pinned by `tests/cloud/surfaces.test.ts` and `probe.test.ts` against a fake Open Cloud. Read-only checks against the real service (2026-09-14, no Studio session connected):
+
+| Check | Result |
+|---|---|
+| MCP handshake of the built server (stdio, launched the way Claude Code launches it, on a spare port) | 9 tools; `cloud` lists 12 actions and 10 `info` targets; server instructions 2017 bytes, `cloud` description 1994 bytes, every tool description under 2048; stdout carries MCP only |
+| `info what:"key"` with the real key | `method: "introspect"` in 284 ms — the key-in-body contract works. Every scope string in the capability table matched the key's own list, including `universe-places:write` (hyphenated) and `memory-store.queue:dequeue` |
+| Introspection shape | resource ids arrive as string arrays: `universeIds` on most scopes, `universeDatastores` as `{universeId}` entries (no `datastoreName` when a scope covers every store), `groupIds` on `asset`. `authorizedUserId` is a number. A key without an expiry sends no expiry field, so which documented spelling Roblox uses is still open |
+| Memory store scope spelling | the bare OpenAPI form (`memory-store.sorted-map:read`, `memory-store.queue:add`, …); tables and `403` messages now name it |
+| Corrected from the live shape | `user.user-notification` is universe-bound on a real key, so `notify` is now judged against the universe like the other universe-scoped calls |
+
+Still to verify live — these need Studio connected, or they write:
+
+1. **`bound_to_this_universe`** with PIRATES open (the check above had no session, so universe binding was not exercised).
+2. **`publish`** a saved copy of PIRATES → `version_number` increments. With the place open in Studio, note whether Roblox answers the documented busy-place `409`.
+3. **`memory`** round trip: `map_set` / `map_list` / `map_delete` (is `nextPageToken` null or absent on the last page?); `queue_add` → `queue_read` (`items` or `queueItems`? `readId`?) → `queue_discard`.
+4. **`asset update`** of a test decal → same `asset_id`, new `revision_id`. **`asset rollback`**: does the JSON body succeed, or does it fall back to multipart?
+5. **`instance children`** on root → the operation settles; **`instance update`** of a test ModuleScript's `Source`, read back with `cloud luau`.
+6. **`restriction ban` / `get` / `unban`** on an alt account at universe level, then `level: "place"`; `logs` shows both.
+7. **`notify`** to a test account with a real notification string.
