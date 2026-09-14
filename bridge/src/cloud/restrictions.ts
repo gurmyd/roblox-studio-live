@@ -66,7 +66,9 @@ export async function restriction(a: CloudArgs, ctx: CloudContext, http: HttpCli
         displayReason,
         ...(a.exclude_alts !== undefined ? { excludeAltAccounts: a.exclude_alts } : {}),
       };
-      const res = await http.request({ method: 'PATCH', path: `${base.path}/${id}`, json: { gameJoinRestriction }, idempotent: true });
+      // Never retried: Roblox rate-limits restriction changes per user, and a retry lands in the same
+      // window (measured live: four attempts on user 1, all 429).
+      const res = await http.request({ method: 'PATCH', path: `${base.path}/${id}`, json: { gameJoinRestriction }, noRetry: true });
       return {
         value: {
           ...base.context,
@@ -86,7 +88,7 @@ export async function restriction(a: CloudArgs, ctx: CloudContext, http: HttpCli
       const id = need(a.id, 'id', 'for restriction unban (the player’s user id)');
       // The same PATCH with active:false. Reasons and duration are cleared with it, which is
       // what lifting a ban should do.
-      const res = await http.request({ method: 'PATCH', path: `${base.path}/${id}`, json: { gameJoinRestriction: { active: false } }, idempotent: true });
+      const res = await http.request({ method: 'PATCH', path: `${base.path}/${id}`, json: { gameJoinRestriction: { active: false } }, noRetry: true });
       return { value: { ...base.context, user_id: id, banned: false, ...asObject(res.body) } };
     }
     case 'logs': {

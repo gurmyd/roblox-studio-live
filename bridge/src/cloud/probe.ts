@@ -192,7 +192,7 @@ export function judge(capability: Capability, index: Map<string, KeyScope[]>, id
     return {
       ...base,
       status: 'unknown',
-      note: 'needs no scope, but Roblox answers 401 here to a group-owned key whatever its permissions, and introspection does not say who owns the key — only the call itself can tell',
+      note: `${capability.requires.length === 0 ? 'needs no scope' : 'the key holds the scope'}, but Roblox answers 401 here to a group-owned key whatever its permissions, and introspection does not say who owns the key — only the call itself can tell`,
     };
   }
   if (capability.binding === 'universe' && !ids.universeId && capability.requires.length > 0) {

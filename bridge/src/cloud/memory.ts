@@ -138,8 +138,9 @@ export async function memory(a: CloudArgs, ctx: CloudContext, http: HttpClient):
         idempotent: true,
       });
       const body = asObject(res.body);
-      // The spec says `items` / `readId`; community reports of the live service answering
-      // `queueItems` are on record, so read either rather than silently returning nothing.
+      // The spec says `items` / `readId`, but the live service answers `queueItems` / `id` (measured
+      // 2026-09-14), and :discard accepts that id as `readId`. Read either rather than silently
+      // returning nothing.
       const items = Array.isArray(body.items) ? body.items : Array.isArray(body.queueItems) ? body.queueItems : [];
       const readId = stringField(body, 'readId') ?? stringField(body, 'id');
       return {
@@ -150,7 +151,7 @@ export async function memory(a: CloudArgs, ctx: CloudContext, http: HttpClient):
           ...(readId ? { read_id: readId } : {}),
           ...(readId ? {} : { read_id_missing: 'the service returned no readId, so these items cannot be discarded; they reappear when the invisibility window ends' }),
           note: readId
-            ? `Reading does not remove items: they are invisible to other readers for the invisibility window (default applies when invisibility_s is unset), then come back. Call memory queue_discard with read_id "${readId}" once you have processed them.`
+            ? `Reading does not remove items: they stay hidden from other readers for ${a.invisibility_s !== undefined ? `${Math.ceil(a.invisibility_s)} s` : 'Roblox’s default invisibility window'}, then come back. Call memory queue_discard with read_id "${readId}" once you have processed them.`
             : 'Reading does not remove items; they reappear when the invisibility window ends.',
           raw_keys: Object.keys(body),
         },

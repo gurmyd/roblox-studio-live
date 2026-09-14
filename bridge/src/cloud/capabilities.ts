@@ -308,6 +308,9 @@ export const CAPABILITIES: Capability[] = [
     permissions: ['Inventory → user.inventory-item:read'],
     requires: [['user.inventory-item:read']],
     binding: 'none',
+    // A group-owned key holding this scope still gets 401 "Authentication type provided was
+    // invalid!" here (measured 2026-09-14): it is a Users endpoint like the ones below.
+    userKeyOnly: true,
     kind: 'read',
     request: (ids) => (ids.creatorType === 'User' && ids.creatorId ? { method: 'GET', path: `${CLOUD_V2}/users/${ids.creatorId}/inventory-items`, query: { maxPageSize: 1 } } : null),
   },

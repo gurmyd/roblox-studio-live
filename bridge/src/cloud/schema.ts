@@ -68,7 +68,7 @@ export const cloudToolShape = {
   version_type: z.enum(VERSION_TYPES).optional().describe('publish: "Published" (default, goes live) or "Saved" (stored as a version without publishing)'),
 
   // assets
-  file: z.string().min(1).optional().describe('asset_upload / asset update / publish: absolute path of the file'),
+  file: z.string().min(1).optional().describe('asset_upload / asset update (.fbx Models only) / publish: absolute path of the file'),
   asset_type: z.string().min(1).optional().describe('asset_upload: Model | Decal | Audio | Video | Animation | Mesh (also Image)'),
   name: z.string().min(1).max(50).optional().describe('asset_upload / asset update: display name'),
   description: z.string().max(1000).optional().describe('asset_upload / asset update: description'),
@@ -117,7 +117,7 @@ export const cloudToolDescription: string = [
   '- message: topic + message (≤1 KB) → MessagingService in live servers, not playtests.',
   '- info (universe|place|group|user|me|key|memberships|roles|inventory|subscription): reads. key = the capability probe.',
   "- publish: uploads a local .rbxl/.rbxlx as the place's new live version. Do this before luau / instance, which read the PUBLISHED place, never the Studio session.",
-  '- asset_upload: file + asset_type (Model|Decal|Audio|Video|Animation|Mesh|Image) → asset_id + moderation. asset (get|update|versions|rollback|archive|restore): the rest of the lifecycle; update puts a NEW VERSION behind an existing asset_id.',
+  '- asset_upload: file + asset_type (Model|Decal|Audio|Video|Animation|Mesh|Image) → asset_id + moderation. asset (get|update|versions|rollback|archive|restore): the rest of the lifecycle; update puts a new .fbx behind an existing Model asset_id.',
   '- luau: runs a script in a fresh server copy of the published place; returns results + logs.',
   '- instance (get|update|children): read/edit instances of the published place ("root" = the DataModel). For the OPEN place use the run tool.',
   '- restriction (list|get|ban|unban|logs): ban a user from the experience or one place.',

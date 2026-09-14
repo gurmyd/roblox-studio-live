@@ -268,8 +268,8 @@ describe('asset lifecycle', () => {
   });
 
   it('puts a new version behind the SAME asset id: multipart PATCH, then polls the operation', async () => {
-    const file = path.join(home, 'tex.png');
-    await fsp.writeFile(file, Buffer.from('89504e470d0a1a0a', 'hex'));
+    const file = path.join(home, 'cube.fbx');
+    await fsp.writeFile(file, Buffer.from('; FBX 7.3.0 project file'));
     const { ctx } = makeCtx(home);
     fake.respond((req) => {
       if (req.method === 'PATCH') return { body: { path: 'operations/op-7', done: false } };
@@ -283,7 +283,7 @@ describe('asset lifecycle', () => {
     const form = await fake.seen[0].formData();
     expect(JSON.parse(String(form.get('request')))).toEqual({ assetId: 555 });
     const content = form.get('fileContent') as File;
-    expect(content.type).toBe('image/png');
+    expect(content.type).toBe('model/fbx');
     // The poll must not double the "operations/" prefix the Operation path carries.
     expect(fake.seen[1]).toMatchObject({ method: 'GET', path: '/assets/v1/operations/op-7' });
     expect(value).toMatchObject({ asset_id: 555, updated: true, revision_id: 'r2', moderation: 'reviewing', operation_id: 'op-7' });
@@ -303,6 +303,27 @@ describe('asset lifecycle', () => {
     expect(errorOf(await runCloudTool({ action: 'asset', op: 'update', asset_id: 555 }, ctx)).message).toContain('needs something to change');
   });
 
+  it('refuses to replace anything but an FBX, which is all Roblox can update', async () => {
+    // Live, a Decal update answered 400 "Updating Decal is not supported yet".
+    const file = path.join(home, 'decal.png');
+    await fsp.writeFile(file, Buffer.from('89504e470d0a1a0a', 'hex'));
+    const { ctx } = makeCtx(home);
+    const err = errorOf(await runCloudTool({ action: 'asset', op: 'update', asset_id: 555, file }, ctx));
+    expect(err.code).toBe('bad_request');
+    expect(err.message).toContain('FBX');
+    expect(err.message).toContain('asset_upload');
+    expect(fake.seen).toHaveLength(0);
+  });
+
+  it('does not claim a new version when only metadata changed, even when Roblox answers with an operation', async () => {
+    const { ctx } = makeCtx(home);
+    fake.respond(() => ({ body: { path: 'operations/op-9', done: true, response: { assetId: '555', revisionId: '1', displayName: 'Renamed' } } }));
+    const value = parse(await runCloudTool({ action: 'asset', op: 'update', asset_id: 555, name: 'Renamed' }, ctx));
+    expect(value).toMatchObject({ updated: true, revision_id: '1', display_name: 'Renamed' });
+    expect(String(value.note)).toContain('unchanged');
+    expect(String(value.note)).not.toContain('new version');
+  });
+
   it('lists versions, rolls back (JSON first, multipart on a 400), and archives / restores', async () => {
     const { ctx } = makeCtx(home);
     fake.respond(() => ({ body: { assetVersions: [{ path: 'assets/555/versions/2' }] } }));
@@ -318,7 +339,7 @@ describe('asset lifecycle', () => {
     expect(fake.seen[0].json).toEqual({ assetVersion: 'assets/555/versions/2' });
     expect(String(fake.seen[1].headers['content-type'])).toContain('multipart/form-data');
     expect((await fake.seen[1].formData()).get('assetVersion')).toBe('assets/555/versions/2');
-    expect(rolled).toMatchObject({ rolled_back_to: 2, asset_version: 'assets/555/versions/2' });
+    expect(rolled).toMatchObject({ rolled_back_to: 2, asset_version: 'assets/555/versions/2', sent_as: 'multipart' });
 
     fake.reset();
     fake.respond(() => ({ body: {} }));
@@ -398,6 +419,22 @@ describe('restriction', () => {
     expect(errorOf(await runCloudTool({ action: 'restriction', op: 'get' }, ctx)).message).toContain('id');
     expect(fake.seen).toHaveLength(0);
   });
+
+  it('does not replay a restriction change into Roblox’s per-user rate limit', async () => {
+    // Live, every attempt on user 1 answered this 429, retries included.
+    const { ctx } = makeCtx(home);
+    fake.respond(() => ({ status: 429, headers: { 'retry-after': '0' }, body: { code: 'RESOURCE_EXHAUSTED', message: 'You have made too many requests for user 1 in this universe or place in a short period. Please try again.' } }));
+    const err = errorOf(await runCloudTool({ action: 'restriction', op: 'ban', id: 1, reason: 'r', display_reason: 'd' }, ctx));
+    expect(fake.seen).toHaveLength(1);
+    expect(err.code).toBe('rate_limited');
+    expect(err.message).toContain('Not retried');
+    expect(err.message).toContain('one user');
+
+    fake.reset();
+    fake.respond(() => ({ status: 429, headers: { 'retry-after': '0' }, body: { message: 'slow down' } }));
+    await runCloudTool({ action: 'restriction', op: 'unban', id: 1 }, ctx);
+    expect(fake.seen).toHaveLength(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -419,11 +456,35 @@ describe('instance', () => {
 
   it('lists children with the :listChildren GET, and answers at once when the operation is already done', async () => {
     const { ctx } = makeCtx(home);
-    fake.respond(() => ({ body: { path: OP, done: true, response: { instances: [{ engineInstance: { Id: 'a1' } }] } } }));
+    fake.respond(() => ({ body: { path: OP, done: true, response: { instances: [{ hasChildren: false, engineInstance: { Id: 'a1', Name: 'Mod', Details: { ModuleScript: { Source: 'return 1' } } } }] } } }));
     const value = parse(await runCloudTool({ action: 'instance', op: 'children', instance_id: 'a0', page_size: 20 }, ctx));
     expect(fake.seen[0]).toMatchObject({ method: 'GET', path: '/cloud/v2/universes/111/places/222/instances/a0:listChildren', query: { maxPageSize: '20' } });
     expect(fake.seen).toHaveLength(1);
-    expect(value.instances).toEqual([{ engineInstance: { Id: 'a1' } }]);
+    expect(value.children).toEqual([{ id: 'a1', name: 'Mod', class: 'ModuleScript', has_children: false }]);
+    expect(value.count).toBe(1);
+    // maxPageSize is not implemented by Roblox on listChildren; the result says so when one is passed.
+    expect(String(value.page_size_note)).toContain('not implemented');
+  });
+
+  it('lists a root with ~95 services in full, compactly, under the result cap', async () => {
+    // Live, the verbose form of the root's ~90 children was cut to 50 by the 20 KB cap, and paging cannot recover the rest.
+    const { ctx } = makeCtx(home);
+    const id = (i: number): string => `4695731a-df11-071b-0ab9-f50c${String(i).padStart(8, '0')}`;
+    const instances = Array.from({ length: 95 }, (_, i) => ({
+      path: `universes/111/places/222/instances/${id(i)}`,
+      hasChildren: i % 3 === 0,
+      engineInstance: { Id: id(i), Parent: '5c434eab-e70c-2227-0ab9-f56e00000001', Name: `Service${i}`, Details: {} },
+    }));
+    fake.respond(() => ({ body: { path: OP, done: true, response: { '@type': 'type.googleapis.com/roblox.open_cloud.cloud.v2.ListInstanceChildrenResponse', instances, nextPageToken: '' } } }));
+    const value = parse(await runCloudTool({ action: 'instance', op: 'children' }, ctx));
+    expect(value.truncated).toBeUndefined();
+    expect(value.count).toBe(95);
+    const children = value.children as Array<Record<string, unknown>>;
+    expect(children).toHaveLength(95);
+    expect(children[0]).toEqual({ id: id(0), name: 'Service0', has_children: true });
+    expect(children[94]).toEqual({ id: id(94), name: 'Service94', has_children: false });
+    expect(value['@type']).toBeUndefined();
+    expect(value.nextPageToken).toBeUndefined();
   });
 
   it('updates a script with camelCase engineInstance around PascalCase Details', async () => {
@@ -489,7 +550,7 @@ describe('notify', () => {
       },
     });
     expect(value).toMatchObject({ sent: true, user_id: 42, id: 'abc' });
-    expect(String(value.note)).toMatch(/not guaranteed/);
+    expect(String(value.note)).toMatch(/not delivered/);
   });
 
   it('validates the recipient, template, parameter types and launch data size', async () => {
@@ -500,6 +561,17 @@ describe('notify', () => {
     expect(() => parameterValues({ n: 1.5 })).toThrow(/integer/);
     expect(() => parameterValues({ n: true })).toThrow(/string or an integer/);
     expect(fake.seen).toHaveLength(0);
+  });
+
+  it('explains a recipient who has not opted in, which Roblox checks on send', async () => {
+    // The live answer, verbatim apart from the ids.
+    const { ctx } = makeCtx(home);
+    fake.respond(() => ({ status: 400, body: { code: 'FAILED_PRECONDITION', message: 'User 42 is not opted in to receive notifications for your experience 111.' } }));
+    const err = errorOf(await runCloudTool({ action: 'notify', id: 42, message_id: 'm' }, ctx));
+    expect(err.code).toBe('bad_request');
+    expect(err.not_opted_in).toBe(true);
+    expect(err.message).toContain('PromptOptIn');
+    expect(fake.seen).toHaveLength(1);
   });
 });
 
@@ -529,5 +601,16 @@ describe('info reads added with this surface', () => {
 
     expect(errorOf(await runCloudTool({ action: 'info', what: 'subscription', id: 42 }, ctx)).message).toContain('product_id');
     expect(errorOf(await runCloudTool({ action: 'info', what: 'inventory' }, ctx)).message).toContain('id');
+  });
+
+  it('names the key-type limit on Users endpoints in either of Roblox’s wordings, instead of blaming the key', async () => {
+    // Live, a group-owned key holding user.inventory-item:read got exactly this 401 on inventory.
+    const { ctx } = makeCtx(home);
+    fake.respond(() => ({ status: 401, body: { code: 'UNAUTHENTICATED', message: 'Authentication type provided was invalid!' } }));
+    const err = errorOf(await runCloudTool({ action: 'info', what: 'inventory', id: 42 }, ctx));
+    expect(err.code).toBe('unauthorized');
+    expect(err.key_type_limit).toBe(true);
+    expect(err.message).toContain('USER-owned');
+    expect(err.message).not.toMatch(/mistyped|revoked/);
   });
 });

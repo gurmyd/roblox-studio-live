@@ -229,6 +229,19 @@ describe('info what:"key" — introspection', () => {
     expect(byId.get('info.universe')?.status).toBe('allowed');
   });
 
+  it('leaves info inventory unknown when the scope is held, since Roblox refuses a group-owned key there', async () => {
+    // Live, a group-owned key with user.inventory-item:read got 401 on inventory.
+    const { ctx } = makeCtx(home);
+    fake.respond(() => ({ body: introspection([{ name: 'user.inventory-item', operations: ['read'] }]) }));
+    let byId = capabilities(parse(await runCloudTool({ action: 'info', what: 'key' }, ctx)));
+    expect(byId.get('inventory.read')?.status).toBe('unknown');
+    expect(byId.get('inventory.read')?.note).toContain('holds the scope');
+
+    fake.respond(() => ({ body: introspection([]) }));
+    byId = capabilities(parse(await runCloudTool({ action: 'info', what: 'key' }, ctx)));
+    expect(byId.get('inventory.read')?.status).toBe('denied');
+  });
+
   it('never lets the key reach the result or the logs, even though it travels in the introspection body', async () => {
     const { ctx, logs } = makeCtx(home);
     fake.respond((req) => ({ body: { ...introspection([]), echoed: JSON.stringify(req.json) } }));

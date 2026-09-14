@@ -134,6 +134,14 @@ export async function asset(a: CloudArgs, http: HttpClient, deps: ActionDeps): P
       let upload: Record<string, unknown> = {};
       let timeoutMs = a.timeout_ms ?? DEFAULT_WAIT_MS;
       if (a.file !== undefined) {
+        // Roblox replaces content only for FBX-based Model assets; every other type answers
+        // "Updating <Type> is not supported yet" (measured 2026-09-14 on a Decal; the usage guide
+        // says the same for Audio, Image, Mesh and Video). Refused here, before the upload.
+        if (path.extname(a.file).toLowerCase() !== '.fbx') {
+          throw badRequest(
+            'asset update can only replace the file of an FBX-based Model asset (Roblox answers "Updating Decal is not supported yet" for images, and the same for audio, mesh and video). Upload a new asset with asset_upload instead, or pass only name / description to change metadata.',
+          );
+        }
         const { bytes, contentType } = await readFile(a.file);
         form.append('fileContent', new Blob([bytes], { type: contentType }), path.basename(a.file));
         timeoutMs = uploadTimeoutMs(bytes.length, a.timeout_ms ?? DEFAULT_WAIT_MS, REQUEST_TIMEOUT_MS, MAX_WAIT_MS);
@@ -153,7 +161,8 @@ export async function asset(a: CloudArgs, http: HttpClient, deps: ActionDeps): P
       });
       const body = asObject(res.body);
 
-      // Metadata-only updates answer with the changed fields, not an Operation.
+      // The spec's example answers a metadata-only update with the changed fields; live it came back
+      // as an Operation (2026-09-14). Both are handled.
       if (body.done === undefined && body.path === undefined && body.operationId === undefined) {
         return { value: { asset_id: id, updated: true, ...upload, ...body, elapsed_ms: deps.now() - started } };
       }
@@ -187,7 +196,10 @@ export async function asset(a: CloudArgs, http: HttpClient, deps: ActionDeps): P
           ...upload,
           operation_id: operationId,
           elapsed_ms: deps.now() - started,
-          note: 'Same asset id, new version — every rbxassetid:// reference already placed in the game now resolves to this content once moderation approves it.',
+          note:
+            a.file !== undefined
+              ? 'Same asset id, new version — every rbxassetid:// reference already placed in the game now resolves to this content once moderation approves it.'
+              : 'Metadata updated; the content and its version are unchanged.',
         },
       };
     }
@@ -206,18 +218,21 @@ export async function asset(a: CloudArgs, http: HttpClient, deps: ActionDeps): P
       const assetVersion = `assets/${id}/versions/${version}`;
       // POST /assets/v1/assets/{assetId}/versions:rollback
       // The spec declares multipart with an `assetVersion` field while its own runnable sample
-      // sends JSON. The field name is certain, the encoding is not — so try JSON (the sample) and
-      // fall back to multipart on a 400 rather than making the caller guess.
+      // sends JSON. Live, Roblox accepts JSON (2026-09-14); the one-time multipart retry on a 400
+      // stays in case that changes, and `sent_as` in the result says which one landed.
       let res;
+      let sentAs: 'json' | 'multipart' = 'json';
       try {
         res = await http.request({ method: 'POST', path: `${ASSETS_V1}/assets/${id}/versions:rollback`, json: { assetVersion } });
       } catch (err) {
         if (!(err instanceof CloudError) || err.status !== 400) throw err;
         const form = new FormData();
         form.append('assetVersion', assetVersion);
+        sentAs = 'multipart';
         res = await http.request({ method: 'POST', path: `${ASSETS_V1}/assets/${id}/versions:rollback`, form });
       }
-      return { value: { asset_id: id, rolled_back_to: version, asset_version: assetVersion, ...asObject(res.body) } };
+      // sent_as records which encoding Roblox accepted, so the spec contradiction can be settled.
+      return { value: { asset_id: id, rolled_back_to: version, asset_version: assetVersion, sent_as: sentAs, ...asObject(res.body) } };
     }
 
     case 'archive':

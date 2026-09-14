@@ -51,6 +51,25 @@ function validateProperties(className: string, properties: Record<string, unknow
 }
 
 /**
+ * listChildren answers with a whole resource per child — resource path, parent id, empty details —
+ * which pushed the DataModel root's ~90 services past the 20 KB result cap (measured 2026-09-14:
+ * 50 shown, 41 cut). Its maxPageSize is not implemented, so paging cannot recover the rest. The
+ * compact form keeps what an agent walks the tree with: id, name, class when the API names it, and
+ * whether there is more below.
+ */
+export function compactChildren(body: Record<string, unknown>): Record<string, unknown> {
+  const raw = Array.isArray(body.instances) ? body.instances : [];
+  const children = raw.map((item) => {
+    const entry = asObject(item);
+    const instance = asObject(entry.engineInstance);
+    const kind = Object.keys(asObject(instance.Details))[0];
+    return { id: instance.Id ?? null, name: instance.Name ?? null, ...(kind ? { class: kind } : {}), has_children: entry.hasChildren === true };
+  });
+  const more = typeof body.nextPageToken === 'string' && body.nextPageToken !== '' ? { nextPageToken: body.nextPageToken } : {};
+  return { children, count: children.length, ...more };
+}
+
+/**
  * Every Instance operation answers with an Operation; the official samples poll it by taking
  * `path` verbatim and requesting /cloud/v2/{path}. The path is instance-scoped — there is no
  * global /cloud/v2/operations/{id} — so it is never rebuilt here, only echoed back.
@@ -126,11 +145,13 @@ export async function instance(a: CloudArgs, ctx: CloudContext, http: HttpClient
     const reason = stringField(err, 'message') ?? JSON.stringify(state.error);
     return { isError: true, value: { error: { code: 'task_failed', message: `Instance ${op} failed: ${reason}`, operation_error: state.error, ...context, operation: operationPath, elapsed_ms } } };
   }
-  const response = asObject(state.response);
+  // `@type` is a protobuf type URL, noise to an agent.
+  const response = Object.fromEntries(Object.entries(asObject(state.response)).filter(([name]) => name !== '@type'));
+  const payload = op === 'children' ? compactChildren(response) : response;
   return {
     value: {
       ...context,
-      ...response,
+      ...payload,
       ...(operationPath ? { operation: operationPath } : {}),
       // Declared in the spec but not implemented server-side (Roblox staff, 2025-02-25): the service
       // returns as many children as it can whatever is sent. Said here so an agent does not page on it.

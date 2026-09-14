@@ -63,7 +63,7 @@ export async function notify(a: CloudArgs, ctx: CloudContext, http: HttpClient):
       ids_from: u.from,
       message_id: messageId,
       ...body,
-      note: 'Delivery is not guaranteed: the recipient must have played this experience recently and have notifications enabled, and Open Cloud has no endpoint to check either. The response only confirms Roblox accepted the request.',
+      note: 'Accepted is not delivered: Roblox refuses a recipient who has not opted in to this experience’s notifications (400 FAILED_PRECONDITION, naming them) and delivers an accepted one only if the player is otherwise eligible. There is no call to check either in advance.',
     },
   };
 }

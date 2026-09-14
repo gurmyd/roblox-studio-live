@@ -116,8 +116,10 @@ function describeError(err: CloudError, a: CloudArgs, ctx: CloudContext, permiss
       // Roblox answers 401 "Only OAuth tokens and User API keys are supported" on the Groups/Users
       // endpoints when the key is group-owned (measured live) — that is a key *type* limit, not a bad key.
       const detail = JSON.stringify(err.details ?? {});
-      if (/Only OAuth tokens and User API keys/i.test(detail)) {
-        message += `. This endpoint only accepts a USER-owned API key (or OAuth); the configured key (from ${describeKeySource(source, ctx.home)}) is group-owned, which Roblox does not allow here. Everything universe-scoped (datastores, messaging, assets, luau) still works with it; create a user-owned key in Creator Hub for group/user lookups.`;
+      // Roblox words it two ways: "Only OAuth tokens and User API keys are supported" on Groups/Users
+      // reads, "Authentication type provided was invalid!" on inventory (both measured live).
+      if (/Only OAuth tokens and User API keys|Authentication type provided was invalid/i.test(detail)) {
+        message += `. This endpoint only accepts a USER-owned API key (or OAuth); the configured key (from ${describeKeySource(source, ctx.home)}) is group-owned, which Roblox does not allow here. Everything universe-scoped (datastores, messaging, assets, luau) still works with it; create a user-owned key in Creator Hub for group / user / membership / role / inventory reads.`;
         extra.key_type_limit = true;
       } else {
         message += `. The key (from ${describeKeySource(source, ctx.home)}) was rejected: it may be mistyped, expired, revoked, or limited to other IPs. Replace it in place — the key is re-read on every call.`;
@@ -155,9 +157,21 @@ function describeError(err: CloudError, a: CloudArgs, ctx: CloudContext, permiss
       }
       break;
     }
-    case 'rate_limited':
-      message += '. Retried 3 times; wait before calling again.';
+    case 'rate_limited': {
+      const attempts = typeof err.details.attempts === 'number' ? err.details.attempts : 1;
+      message += attempts > 1 ? `. Retried ${attempts - 1} times; wait before calling again.` : '. Not retried; wait before calling again.';
+      if (a.action === 'restriction') {
+        message += ' Roblox also limits how often one user’s restriction can change, and a heavily used id (1, measured live) can be throttled on the very first call; wait a minute or use another account.';
+      }
       break;
+    }
+    case 'bad_request': {
+      if (a.action === 'notify' && /not opted in/i.test(message)) {
+        message += '. The player has to opt in from inside the experience (ExperienceNotificationService:PromptOptIn); Open Cloud cannot opt them in.';
+        extra.not_opted_in = true;
+      }
+      break;
+    }
     case 'server_error':
       message +=
         err.details.attempts === 1 && err.details.not_retried !== undefined
