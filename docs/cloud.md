@@ -36,7 +36,7 @@ Ask before planning multi-step work. The report lists every capability (`datasto
 
 - **Introspection first** (`method: "introspect"`). Roblox's key introspection endpoint returns the key's own scope list, with the universes and creators each scope is bound to (verified against a real key, 2026-09-14). The report judges every capability against it — writes included — without calling anything else. It also returns `key` (`name`, `owner_user_id`, `enabled`, `expired`, `expires`), `scopes_held`, and `bound_to_this_universe`: `false` means the key was never given this experience, one fix in Creator Hub rather than a dozen missing scopes. A data store scope narrowed to named stores is `allowed` with a note naming them.
 - **Trial reads as a fallback** (`method: "probe"`, with `introspect_error` saying why). Harmless reads against the reserved name `__studio_live_probe__`: Roblox authorizes a resource inside a universe before resolving it, so `403` means the scope is missing and `404` means it is present. Writes cannot be tried harmlessly and stay `unknown`; `deep: true` adds the ones a request against the reserved name can settle (a delete, or a read of the empty reserved queue — nothing real changes). A `403` on every universe-scoped probe is reported as an unbound universe. Probes are never retried, so a rate-limited probe costs one request per capability, not four.
-- **Expected `unknown`s.** `info group` / `info user` / `info memberships` / `info roles` need no scope at all, but Roblox answers `401` to a group-owned key there (see the end of this page), and introspection does not say who owns a key. Memory store scopes have shipped under three spellings (below); a spelling the tool does not know is `unknown` with the held names listed, not `denied`.
+- **Expected `unknown`s.** `info group` / `info user` / `info memberships` / `info roles` need no scope and `info inventory` needs only its own, but Roblox answers `401` to a group-owned key on all five (see the end of this page), and introspection does not say who owns a key. Memory store scopes have shipped under three spellings (below); a spelling the tool does not know is `unknown` with the held names listed, not `denied`.
 
 ### 1.4 Permissions per action
 
@@ -142,10 +142,10 @@ Fast, short-lived cross-server state — matchmaking queues, live leaderboards, 
 
 - `ttl_s` and `invisibility_s` are whole seconds; the tool sends them as the protobuf duration strings Open Cloud requires (`"300s"`).
 - `sort_key` is a number or a string; the tool sends `numericSortKey` or `stringSortKey` accordingly. `map_list` filters address it as `sortKey` (`sortKey > 100`, `id > "k-001"`), and `order_by` can only order by `id`.
-- `map_list` always sends `maxPageSize` (default 100, the maximum): left unset, the service returns **one** item, which looks like an empty map.
+- `map_list` always sends `maxPageSize` (default 100, the maximum): left unset, the service returns **one** item, which looks like an empty map. The last page carries `nextPageToken: null`.
 - `map_set` replaces the whole item — the endpoint has no update mask — so a `value`, `ttl_s` or `sort_key` you do not pass is unset. There is no increment on sorted maps in Open Cloud.
 - A queue item's payload is `data` on the wire (a sorted map's is `value`); the tool takes `value` for both.
-- `queue_read` does **not** remove items: they are hidden from other readers for the invisibility window, then reappear. `queue_discard` with the returned `read_id` removes the whole batch; there is no per-item acknowledgement. `all_or_nothing: true` returns 404 unless `count` items are available. The read response is accepted as `items` or `queueItems` (live responses have been reported to differ from the spec), and `raw_keys` shows what arrived.
+- `queue_read` does **not** remove items: they are hidden from other readers for the invisibility window, then reappear. `queue_discard` with the returned `read_id` removes the whole batch; there is no per-item acknowledgement. `all_or_nothing: true` returns 404 unless `count` items are available. The live service answers a read with `queueItems` and puts the read id in `id` — not the spec's `items` / `readId` (measured 2026-09-14). The tool reads either, returns `read_id`, and `queue_discard` sends it back as `readId`, which the service accepts; `raw_keys` shows what arrived.
 
 ### 3.4 `message` — MessagingService publish
 
@@ -169,7 +169,7 @@ JSON is sent stringified; the payload must be ≤ 1 KB and the topic ≤ 80 char
 {"action":"info","what":"subscription","product_id":9001,"id":100000001}
 ```
 
-`key` is the capability report of §1.3. `universe` returns `displayName`, `description`, `visibility`, `rootPlace`, `ageRating`, device flags, `user` or `group` owner path; `place` returns `displayName`, `description`, `serverSize`, `root`; `group` / `user` return the Open Cloud v2 resources. `memberships` and `roles` default to the group that owns the place (a membership's `role` is the member's highest-ranked role, `roles` all of them); roles page at most 20. `inventory` takes Roblox's own `key=value` filter grammar, not CEL (`inventoryItemAssetTypes=HAT,CLASSIC_PANTS`, `gamePasses=true`, `badges=true`), and type fields cannot be combined with id fields. `subscription` requests the `FULL` view — the default `BASIC` omits most fields — and the subscription id is the subscriber's user id.
+`key` is the capability report of §1.3. `universe` returns `displayName`, `description`, `visibility`, `rootPlace`, `ageRating`, device flags, `user` or `group` owner path; `place` returns `displayName`, `description`, `serverSize`, `root`; `group` / `user` return the Open Cloud v2 resources. `memberships` and `roles` default to the group that owns the place (a membership's `role` is the member's highest-ranked role, `roles` all of them); roles page at most 20. `inventory` takes Roblox's own `key=value` filter grammar, not CEL (`inventoryItemAssetTypes=HAT,CLASSIC_PANTS`, `gamePasses=true`, `badges=true`), and type fields cannot be combined with id fields. It needs a user-owned key: a group-owned one gets `401 Authentication type provided was invalid!` even when it holds the scope (measured). `subscription` requests the `FULL` view — the default `BASIC` omits most fields — and the subscription id is the subscriber's user id.
 
 ### 3.6 `publish` — make a place file the live version
 
@@ -178,7 +178,7 @@ JSON is sent stringified; the payload must be ≤ 1 KB and the topic ≤ 80 char
 {"action":"publish","file":"C:\\places\\game.rbxlx","version_type":"Saved"}
 ```
 
-The step that connects the place open in Studio to everything that reads the **published** place (`luau`, `instance`, live servers). Save the place to a file first (File → Save to File), then publish it.
+The step that connects the place open in Studio to everything that reads the **published** place (`luau`, `instance`, live servers). Save the place to a file first (File → Save to File As…), then publish it. That save is a human step: no Studio API saves a place. A plugin's only save calls are `PromptSaveSelection` (a save dialog for selected instances) and `SaveSelectedToRoblox`, `game:SavePlace` answers "can only be called from a server script", and `SerializationService` serializes the contents of services but refuses the services themselves (all measured 2026-09-14).
 
 - Uploads the raw file bytes to an existing place as a new version. `version_type` is `Published` (default: goes live) or `Saved` (stored as a version without publishing). Result: `version_number`, `published`, `format`, `bytes`.
 - The format comes from the file's **bytes**, not its name: a binary place starts `<roblox!` + `89 FF 0D 0A 1A 0A` and is sent as `application/octet-stream`; an XML place starts `<roblox ` or `<?xml` and is sent as `application/xml`. A file that is neither is refused before upload; a mislabelled one is sent by its contents with a warning.
@@ -212,9 +212,9 @@ The step that connects the place open in Studio to everything that reads the **p
 {"action":"asset","op":"restore","asset_id":5551234}
 ```
 
-- `update` with a `file` puts a **new version behind the same asset id**: every `rbxassetid://` reference already placed in the game resolves to the new content once moderation approves it. `asset_upload` would have minted a new id instead. A content update is a long-running operation polled like an upload (`pending: true` + `operation_id` when `timeout_ms` passes; re-poll with `asset_upload` `operation_id`). `name` / `description` alone update metadata, sent with an `updateMask`, and come back at once.
-- `versions` pages at most 50 (default 8). `rollback` restores a version number from that list. The spec's schema says the body is multipart while its own runnable sample sends JSON; the field (`assetVersion: "assets/{id}/versions/{n}"`) is certain, so the tool sends JSON and retries once as multipart on a `400`.
-- `archive` stops the asset resolving in experiences; `restore` brings it back. Open Cloud has no asset delete.
+- `update` with a `file` puts a **new version behind the same asset id** — for **FBX-based Model assets only**. Roblox answers `Updating Decal is not supported yet` for images (measured) and its guide says the same for audio, meshes and video, so the tool refuses any other file before uploading. Every `rbxassetid://` reference already placed in the game resolves to the new content once moderation approves it; `asset_upload` would have minted a new id instead. A content update is a long-running operation polled like an upload (`pending: true` + `operation_id` when `timeout_ms` passes; re-poll with `asset_upload` `operation_id`). `name` / `description` alone update metadata with an `updateMask`; the version stays the same.
+- `versions` pages at most 50 (default 8), newest first. `rollback` restores a version number from that list by creating a **new** version with its content (measured: rolling back from v2 to v1 produced v3). The spec's schema says the body is multipart while its runnable sample sends JSON; Roblox accepts JSON (measured, `sent_as: "json"` in the result), and the tool keeps a one-time multipart retry on a `400` in case that changes.
+- `archive` stops the asset resolving in experiences; `restore` brings it back. Not every type can be archived: a Model answered `400 … is not an archivable asset type`, while a Decal archived and restored fine (measured). Open Cloud has no asset delete.
 
 ### 3.9 `luau` — Luau Execution Sessions
 
@@ -238,7 +238,8 @@ The step that connects the place open in Studio to everything that reads the **p
 
 - Reads and edits instances of the **published** place without opening it. `instance_id` defaults to `root` (the DataModel); walk down with `children`.
 - Every call is long-running — the reads too. The tool polls the returned operation (`GET /cloud/v2/{operation path}`) until done or `timeout_ms`, then returns the instance or its children; a slow one comes back `pending: true` with `operation`.
-- Only four classes can be written, each with a fixed property set: `Script` / `LocalScript` (`Enabled`, `RunContext` = `Legacy | Server | Client | Plugin`, `Source`), `ModuleScript` (`Source`), `Folder` (none). Anything else is refused before sending — change it with `run` in Studio and `publish`. The API cannot create, delete or reparent instances.
+- `children` lists compact entries — `id`, `name`, `class` and `has_children` — because the API's full resource per child put the root's ~90 services past the result cap (measured: 50 shown, 41 cut; the compact form lists them all in about 11 KB). `class` is present only for the four writable classes; the API sends every other instance with empty details. Walk down by `id`.
+- Only four classes can be written, each with a fixed property set: `Script` / `LocalScript` (`Enabled`, `RunContext` = `Legacy | Server | Client | Plugin`, `Source`), `ModuleScript` (`Source`), `Folder` (none). Anything else is refused before sending — change it with `run` in Studio and `publish`. The API cannot create, delete or reparent instances. An update aimed at an instance of another class fails inside the operation with Roblox's `Incorrect Class Type: Instance is of type Part` (measured).
 - `page_size` is accepted on `children`, but Roblox has not implemented `maxPageSize` there yet: the service returns as many children as it can regardless, and the result says so.
 
 ### 3.11 `restriction` — bans
@@ -256,6 +257,7 @@ The step that connects the place open in Studio to everything that reads the **p
 - `level` is `universe` (default: every place in the experience) or `place` (the open place only, or `place_id`). It is never inferred from the session's place id, which would silently narrow every ban.
 - `ban` needs both `reason` (the private moderation note) and `display_reason` (what the player sees). Omit `duration_s` for a permanent ban; `-1` is not how Open Cloud expresses that. `exclude_alts: true` keeps the ban off detected alt accounts. Open Cloud has no create or delete here: a ban is an upsert and `unban` is the same call with the ban lifted, which clears its reasons and duration.
 - `logs` is universe-level only; its `filter` supports `user` and `place`. Log entries carry `active` / `duration` / `privateReason` at the top level, unlike a restriction, which nests them under `gameJoinRestriction`.
+- Roblox rate-limits changes per user ("too many requests for user N in a short period"); user id 1 was throttled on the very first call. `ban` / `unban` are therefore never retried — wait a minute or use another account. Banning the owner's own account is allowed (measured with a 60 s ban, lifted at once).
 
 ### 3.12 `notify` — experience notifications
 
@@ -264,7 +266,7 @@ The step that connects the place open in Studio to everything that reads the **p
 ```
 
 - `message_id` is a notification string made in Creator Hub (Open Cloud cannot create one); `parameters` fill its `{placeholders}` — each a string or an integer, keyed exactly as in the string (hyphens included). `launch_data` (≤ 200 bytes) reaches the experience when the player taps the notification.
-- Delivery is not guaranteed: the recipient must have played the experience recently and allow notifications, and Open Cloud has no endpoint to check either. The response confirms only that Roblox accepted the request. Never retried, so a 5xx cannot send twice.
+- Roblox checks opt-in on send: a recipient who has not opted in gets `400 FAILED_PRECONDITION` naming them (`not_opted_in: true`, measured). Players opt in from inside the experience (`ExperienceNotificationService:PromptOptIn`); Open Cloud cannot do it for them. An accepted send is delivered only if the player is otherwise eligible. Never retried, so a 5xx cannot send twice.
 
 ## 4. Errors, retries, limits
 
@@ -277,7 +279,7 @@ The step that connects the place open in Studio to everything that reads the **p
 | `forbidden` | 403 — names the exact Creator Hub permission(s) and the universe to add |
 | `not_found` | 404 — `looked_up` lists the ids/names used |
 | `conflict` | 409/412 — etag mismatch or the resource already exists; for `publish`, usually a busy place (`likely_cause`) |
-| `rate_limited` | 429 after 3 retries, or a `Retry-After` longer than 20 s (`retry_after_ms` given) |
+| `rate_limited` | 429 after 3 retries, or a `Retry-After` longer than 20 s (`retry_after_ms` given); restriction changes are not retried, since Roblox limits those per user |
 | `server_error` / `http_error` | 5xx after 3 retries for idempotent calls; for a non-idempotent call the first 5xx is reported at once with `attempts: 1` and `not_retried`, because the server may already have applied it — check before repeating / other statuses |
 | `network` / `timeout` | connection failure / no answer within the request timeout (30 s; file uploads scale with the file). Only idempotent calls are retried |
 | `task_failed` / `upload_failed` | the Luau task, Instance API operation or asset operation ended in failure (details attached) |
@@ -340,4 +342,4 @@ The hub must include `gameId` (`game.GameId`), `creatorType` (`game.CreatorType.
 
 ## Group-owned keys (measured 2026-09-11)
 
-A key created under a **group** works for everything universe-scoped — datastores, ordered datastores, messaging, asset upload, Luau execution, universe/place info — but Roblox's Groups and Users endpoints answer `401 "Only OAuth tokens and User API keys are supported"` for it. The `cloud` tool reports this as `unauthorized` with `key_type_limit: true` and a message naming the cause; it is not a bad key. Create a user-owned key in Creator Hub if you need `info group` / `info user` / `info memberships` / `info roles`. Introspection cannot tell a group-owned key from a user-owned one, which is why the capability report leaves those four `unknown`.
+A key created under a **group** works for everything universe-scoped — datastores, ordered datastores, messaging, asset upload, Luau execution, universe/place info — but Roblox's Groups and Users endpoints answer `401 "Only OAuth tokens and User API keys are supported"` for it. The `cloud` tool reports this as `unauthorized` with `key_type_limit: true` and a message naming the cause; it is not a bad key. Create a user-owned key in Creator Hub if you need `info group` / `info user` / `info memberships` / `info roles` / `info inventory` (inventory words its refusal as `401 Authentication type provided was invalid!`, measured 2026-09-14; the tool reports both wordings as `key_type_limit`). Introspection cannot tell a group-owned key from a user-owned one, which is why the capability report leaves those five `unknown` when their scope is held.
